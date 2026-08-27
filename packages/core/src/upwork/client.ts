@@ -1,5 +1,5 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { extractJsonBlocks } from './parse.ts';
 import { normalizeJob, type NormalizedJob } from './normalize.ts';
 
@@ -36,7 +36,7 @@ export class UpworkRateLimiter {
 
 export class UpworkMcpClient {
   private client: Client;
-  private transport: StreamableHTTPClientTransport;
+  private transport: SSEClientTransport;
   private rateLimiter: UpworkRateLimiter;
   private isConnected = false;
   private config: UpworkClientConfig;
@@ -46,7 +46,7 @@ export class UpworkMcpClient {
     const url = config.mcpServerUrl || 'https://mcp.upwork.com/mcp';
     this.rateLimiter = new UpworkRateLimiter((config.minGapSeconds ?? 1.5) * 1000);
 
-    this.transport = new StreamableHTTPClientTransport(new URL(url), {
+    this.transport = new SSEClientTransport(new URL(url), {
       requestInit: {
         headers: {
           Authorization: `Bearer ${config.accessToken}`,

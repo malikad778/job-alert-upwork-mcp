@@ -93,11 +93,15 @@ export async function getDashboardDataAction() {
         jobsSeenToday: Number(jobsSeenCount[0]?.count || 0),
         alertsSentToday: Number(alertsSentCount[0]?.count || 0),
         avgScore: Number(avgScoreResult[0]?.avg || 0),
-        lastRunAt: lastRun[0]?.startedAt || null,
+        lastRunAt: lastRun[0]?.startedAt ? lastRun[0].startedAt.toISOString() : null,
         lastRunDurationMs: lastRun[0]?.durationMs || null,
         activeProfilesCount: profiles.length,
       },
-      recentMatches,
+      recentMatches: recentMatches.map((m) => ({
+        ...m,
+        createdAt: m.createdAt ? m.createdAt.toISOString() : null,
+        postedAt: m.postedAt ? m.postedAt.toISOString() : null,
+      })),
       connections,
     };
   } catch (err: any) {
