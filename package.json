@@ -1,0 +1,32 @@
+{
+  "name": "job-radar",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "pnpm@9.15.4",
+  "license": "MIT",
+  "scripts": {
+    "dev": "pnpm --filter @job-radar/web dev",
+    "dev:jobs": "pnpm --filter @job-radar/jobs dev",
+    "build": "pnpm --recursive run build",
+    "test": "pnpm --recursive run test",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "typecheck": "pnpm --recursive run typecheck",
+    "db:generate": "pnpm --filter @job-radar/db db:generate",
+    "db:migrate": "pnpm --filter @job-radar/db db:migrate",
+    "db:push": "pnpm --filter @job-radar/db db:push",
+    "db:seed": "pnpm --filter @job-radar/db db:seed",
+    "doctor": "tsx scripts/doctor.ts",
+    "mcp:probe": "tsx scripts/mcp-probe.ts",
+    "mcp:replay": "tsx scripts/mcp-replay.ts"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "dotenv": "^16.4.7",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3"
+  },
+  "dependencies": {
+    "pdf-to-png-converter": "^4.2.1"
+  }
+}

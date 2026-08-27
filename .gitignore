@@ -1,0 +1,89 @@
+# dependencies
+node_modules/
+/.pnp
+.pnp.js
+
+# testing
+/coverage
+
+# next.js
+.next/
+out/
+build/
+.turbo/
+*.zip
+*.tsbuildinfo
+
+# misc
+.DS_Store
+*.pem
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env*.local
+
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# layer stuff
+function.zip
+layer2_contents/
+
+scratch/
+
+# deployment archives produced by scripts/deploy.ps1
+deploy-*.tar.gz
+*.tar.gz
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PRIVATE UI - excluded from the public open-source repository.
+#
+# This project open-sources the backend only: database schema, background
+# workers, matching/scoring logic, MCP + WhatsApp connectors and the HTTP API.
+# The Next.js presentation layer (landing page and dashboard) stays private.
+#
+# These files are still deployed: scripts/deploy.ps1 ships the local working
+# directory to S3 and the EC2 instance pulls it from there, so the live site is
+# built from local sources rather than from a public `git clone`.
+#
+# Deliberately NOT ignored, because they are the open-source backend surface:
+#   apps/web/src/app/api/**            HTTP routes (WhatsApp webhook, OAuth, AI)
+#   apps/web/src/app/actions/**        server actions
+#   apps/web/src/app/client-metadata.json/
+#   apps/web/src/lib/auth.ts           better-auth server configuration
+#   apps/web/src/lib/require-session.ts
+#   apps/web/src/middleware.ts
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Dashboard route group
+apps/web/src/app/(app)/
+
+# Auth and onboarding screens
+apps/web/src/app/login/
+apps/web/src/app/register/
+apps/web/src/app/onboarding/
+
+# Landing page, root layout and global styling
+apps/web/src/app/page.tsx
+apps/web/src/app/layout.tsx
+apps/web/src/app/globals.css
+apps/web/src/app/landing.css
+apps/web/src/app/icon.jpg
+apps/web/src/app/apple-icon.jpg
+
+# All React components (landing, dashboard shell, design system)
+apps/web/src/components/
+
+# Client-side UI helpers
+apps/web/src/lib/auth-client.ts
+apps/web/src/lib/utils.ts
+
+# Landing page design source (mockups, reference HTML, screenshots)
+stitch_upwork_mcp_flagship_landing_page/
+
+# Screenshots of the private dashboard
+assets/

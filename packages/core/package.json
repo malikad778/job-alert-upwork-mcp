@@ -1,0 +1,45 @@
+{
+  "name": "@job-radar/core",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./env": "./src/env.ts",
+    "./logger": "./src/logger.ts",
+    "./crypto": "./src/crypto/encryption.ts",
+    "./upwork": "./src/upwork/index.ts",
+    "./matching": "./src/matching/index.ts",
+    "./whatsapp": "./src/whatsapp/index.ts",
+    "./ai": "./src/ai/index.ts",
+    "./ai/registry": "./src/ai/registry.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ai-sdk/amazon-bedrock": "2.0.0",
+    "@ai-sdk/anthropic": "^1.1.10",
+    "@ai-sdk/google": "^1.1.17",
+    "@ai-sdk/google-vertex": "0.0.40",
+    "@ai-sdk/openai": "^1.1.13",
+    "@ai-sdk/openai-compatible": "^0.1.12",
+    "@aws-sdk/credential-providers": "^3.750.0",
+    "@modelcontextprotocol/sdk": "^1.6.1",
+    "ai": "^4.1.45",
+    "date-fns": "^4.1.0",
+    "date-fns-tz": "^3.2.0",
+    "pino": "^9.6.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@job-radar/config": "workspace:*",
+    "@types/node": "^22.13.4",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  }
+}
