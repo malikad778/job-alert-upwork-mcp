@@ -254,7 +254,7 @@ try {
                 --query "Reservations[].Instances[].InstanceId" --output text
 
             $ids = @()
-            if ($found) { $ids = $found -split '\s+' | Where-Object { $_ } }
+            if ($found) { $ids = @($found -split '\s+' | Where-Object { $_ }) }
 
             if ($ids.Count -eq 0) {
                 throw "No running instance tagged Name=job-radar-web. Use -NewInstance to provision one."
