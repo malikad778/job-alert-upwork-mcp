@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, upworkConnections, eq } from '@job-radar/db';
 import { exchangeUpworkCode, encryptTokens, UpworkMcpClient } from '@job-radar/core/upwork';
-import { requireSession } from '../../../../lib/require-session';
+import { requireSession, isRedirectError } from '../../../../lib/require-session';
 import { logger } from '@job-radar/core/logger';
 
 export async function GET(req: NextRequest) {
@@ -122,6 +122,9 @@ export async function GET(req: NextRequest) {
 
     return response;
   } catch (err: any) {
+    // requireSession() redirects by throwing - do not report it as an OAuth failure.
+    if (isRedirectError(err)) throw err;
+
     logger.error({ err }, 'Error handling Upwork OAuth callback.');
     return NextResponse.redirect(
       new URL(

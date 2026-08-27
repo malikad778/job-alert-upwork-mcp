@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { randomBytes, createHash } from 'node:crypto';
-import { requireSession } from '../../../../lib/require-session';
+import { requireSession, isRedirectError } from '../../../../lib/require-session';
 
 export async function GET(req: NextRequest) {
   try {
@@ -54,6 +54,10 @@ export async function GET(req: NextRequest) {
 
     return response;
   } catch (err: any) {
+    // requireSession() redirects by throwing; let that reach the framework
+    // instead of reporting it as an authorization failure.
+    if (isRedirectError(err)) throw err;
+
     const origin =
       process.env.BETTER_AUTH_URL ||
       (req.headers.get('x-forwarded-proto')

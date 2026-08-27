@@ -13,7 +13,7 @@ import {
 } from '@job-radar/db';
 import { resolveModel, buildProposalPrompt, systemPrompt, streamText } from '@job-radar/core/ai';
 import { decrypt } from '@job-radar/core/crypto';
-import { requireSession } from '../../../../lib/require-session';
+import { requireSession, isRedirectError } from '../../../../lib/require-session';
 import { logger } from '@job-radar/core/logger';
 
 const DAILY_FREE_PROPOSAL_LIMIT = 3;
@@ -180,6 +180,9 @@ export async function POST(req: NextRequest) {
 
     return result.toDataStreamResponse();
   } catch (err: any) {
+    // requireSession() redirects by throwing - let it through untouched.
+    if (isRedirectError(err)) throw err;
+
     logger.error({ err }, 'Error in proposal streaming draft route.');
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
