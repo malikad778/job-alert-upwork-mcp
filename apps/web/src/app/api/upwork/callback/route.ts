@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db, upworkConnections, eq } from '@job-radar/db';
+import { db, upworkConnections, getUpworkGuardStatus, eq } from '@job-radar/db';
 import { exchangeUpworkCode, encryptTokens, UpworkMcpClient } from '@job-radar/core/upwork';
 import { requireSession, isRedirectError } from '../../../../lib/require-session';
 import { logger } from '@job-radar/core/logger';
@@ -66,11 +66,18 @@ export async function GET(req: NextRequest) {
     let accountRole: string | null = null;
 
     try {
-      const upworkTemp = new UpworkMcpClient({ accessToken: tokens.accessToken });
-      const resolved = await upworkTemp.resolveOrgUid();
-      orgUid = resolved.orgUid;
-      accountName = resolved.accountName;
-      accountRole = resolved.role;
+      // Skipped while Upwork access is disabled. The connection is still saved;
+      // org_uid resolves on the first poll after polling is re-enabled.
+      const guard = await getUpworkGuardStatus();
+      if (guard.blocked) {
+        logger.warn('Upwork access disabled; skipping org_uid resolution during OAuth callback.');
+      } else {
+        const upworkTemp = new UpworkMcpClient({ accessToken: tokens.accessToken });
+        const resolved = await upworkTemp.resolveOrgUid();
+        orgUid = resolved.orgUid;
+        accountName = resolved.accountName;
+        accountRole = resolved.role;
+      }
     } catch (e) {
       logger.warn({ err: e }, 'Could not resolve org_uid immediately during OAuth callback.');
     }

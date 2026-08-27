@@ -8,6 +8,10 @@ import {
   whatsappRecipients,
   upworkConnections,
   jobAlerts,
+  assertUpworkAllowed,
+  recordUpworkCalls,
+  getUpworkUsageToday,
+  UpworkBlockedError,
   eq,
   and,
 } from '@job-radar/db';
@@ -36,6 +40,21 @@ export async function runJobPoll(options: PollOptions): Promise<{
   alertsSent: number;
 }> {
   const startTime = Date.now();
+  const empty = { jobsSeen: 0, jobsNew: 0, matchesFound: 0, alertsSent: 0 };
+
+  // Gate before any network access or poll_runs row is written, so a disabled
+  // deployment leaves no trace of attempted Upwork activity.
+  let settings;
+  try {
+    settings = await assertUpworkAllowed();
+  } catch (err) {
+    if (err instanceof UpworkBlockedError) {
+      logger.warn({ userId: options.userId, code: err.code }, err.message);
+      return empty;
+    }
+    throw err;
+  }
+
   logger.info({ userId: options.userId }, 'Starting job polling run (§10.7)...');
 
   // 1. Load active Upwork connection
@@ -143,10 +162,36 @@ export async function runJobPoll(options: PollOptions): Promise<{
     }
   }
 
+  // Budget is enforced per Upwork identity, since several application accounts
+  // may share one token and Upwork rate-limits the identity, not our user rows.
+  try {
+    await assertUpworkAllowed(orgUid);
+  } catch (err) {
+    if (err instanceof UpworkBlockedError) {
+      logger.warn({ userId: options.userId, orgUid, code: err.code }, err.message);
+      return empty;
+    }
+    throw err;
+  }
+
   const upwork = new UpworkMcpClient({
     accessToken,
     orgUid,
+    // Previously omitted, so the configured gap was silently ignored and the
+    // client fell back to its 1.5s default.
+    minGapSeconds: Number(settings.minSecondsBetweenCalls),
   });
+
+  /** Remaining calls this identity may make today. */
+  let callBudget = settings.maxToolCallsPerDay - (await getUpworkUsageToday(orgUid));
+
+  /** Records a call against the daily budget and reports whether to continue. */
+  const spendCall = async (): Promise<boolean> => {
+    if (callBudget <= 0) return false;
+    callBudget--;
+    await recordUpworkCalls(orgUid!, 1);
+    return true;
+  };
 
   // 2. Load active search profiles
   const profiles = await db
@@ -189,7 +234,11 @@ export async function runJobPoll(options: PollOptions): Promise<{
   let totalMatchesFound = 0;
   let totalAlertsSent = 0;
   let totalEnrichmentCalls = 0;
-  const MAX_PAGES = Number(process.env.POLL_MAX_PAGES || 10);
+  // Driven by admin settings (default 2) rather than a hardcoded 10. Ten pages
+  // per profile per cycle was the main driver of the request volume that got
+  // the account restricted.
+  const MAX_PAGES = settings.maxPagesPerProfile;
+  const MAX_ENRICHMENT = settings.maxEnrichmentCallsPerRun;
 
   // 4. Poll Upwork for each profile
   for (const prof of profiles) {
@@ -201,6 +250,11 @@ export async function runJobPoll(options: PollOptions): Promise<{
 
     // GAP-02: Pagination loop
     while (page < MAX_PAGES) {
+      if (!(await spendCall())) {
+        logger.warn({ orgUid, profileId: prof.id }, 'Daily Upwork call budget exhausted; stopping poll.');
+        break;
+      }
+
       try {
         const searchResult = await upwork.findJobs({
           query,
@@ -263,7 +317,7 @@ export async function runJobPoll(options: PollOptions): Promise<{
               .onConflictDoNothing({ target: [matches.jobId, matches.profileId] });
 
             // GAP-03: Pipeline B enrichment if needed (max 20 calls per run)
-            if (insertedJob && totalEnrichmentCalls < 20) {
+            if (insertedJob && totalEnrichmentCalls < MAX_ENRICHMENT && (await spendCall())) {
               try {
                 const detail = await upwork.getJobDetails(normalized.id, orgUid);
                 if (detail) {

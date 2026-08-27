@@ -444,6 +444,63 @@ export const notificationSettings = pgTable('notification_settings', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/* ── platform-wide integration controls ────────────────────────────── */
+
+/**
+ * Single-row table (id = 'global') holding deployment-wide Upwork controls.
+ *
+ * Lives in the database rather than env vars so an admin can stop all Upwork
+ * traffic instantly from the UI, without a redeploy - which matters when an
+ * account is under Trust & Safety review.
+ *
+ * Defaults are deliberately conservative. The original hardcoded behaviour
+ * (5-minute interval, 10 pages per profile, no daily ceiling) sustained roughly
+ * 1,400 job listings per hour against a single Upwork identity and triggered an
+ * automated abuse restriction.
+ */
+export const platformSettings = pgTable('platform_settings', {
+  id: text('id').primaryKey().default('global'),
+
+  /** Master kill switch. Disabled by default; must be turned on deliberately. */
+  upworkPollingEnabled: boolean('upwork_polling_enabled').notNull().default(false),
+  /** Free-text note shown in the admin UI, e.g. why polling is paused. */
+  upworkDisabledReason: text('upwork_disabled_reason'),
+
+  /** Minutes between automated poll cycles. */
+  pollIntervalMinutes: integer('poll_interval_minutes').notNull().default(60),
+  /** Search result pages fetched per profile per cycle. */
+  maxPagesPerProfile: smallint('max_pages_per_profile').notNull().default(2),
+  /** Minimum seconds between two Upwork tool calls. */
+  minSecondsBetweenCalls: numeric('min_seconds_between_calls', { precision: 5, scale: 2 })
+    .notNull()
+    .default('3'),
+  /** Hard ceiling on Upwork tool calls per Upwork identity per rolling day. */
+  maxToolCallsPerDay: integer('max_tool_calls_per_day').notNull().default(500),
+  /** Detail-enrichment calls allowed per poll run. */
+  maxEnrichmentCallsPerRun: smallint('max_enrichment_calls_per_run').notNull().default(5),
+
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedBy: text('updated_by'),
+});
+
+/**
+ * Upwork tool-call usage, counted per Upwork identity (org_uid) per UTC day.
+ *
+ * Keyed on org_uid rather than user id on purpose: several application accounts
+ * can share one Upwork token, and Upwork rate-limits the identity, not our
+ * user rows.
+ */
+export const upworkUsageDaily = pgTable(
+  'upwork_usage_daily',
+  {
+    day: text('day').notNull(), // YYYY-MM-DD (UTC)
+    orgUid: text('org_uid').notNull(),
+    callCount: integer('call_count').notNull().default(0),
+    lastCallAt: timestamp('last_call_at', { withTimezone: true }),
+  },
+  (t) => [uniqueIndex('upwork_usage_day_org_uq').on(t.day, t.orgUid)],
+);
+
 /* ── AI ────────────────────────────────────────────────────────────── */
 
 export const aiCredentials = pgTable(

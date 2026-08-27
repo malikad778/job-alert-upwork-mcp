@@ -1,6 +1,6 @@
 'use server';
 
-import { db, upworkConnections, upworkProfileSnapshots, eq, and, desc } from '@job-radar/db';
+import { db, upworkConnections, upworkProfileSnapshots, getUpworkGuardStatus, eq, and, desc } from '@job-radar/db';
 import { requireSession } from '../../lib/require-session';
 import { syncUpworkProfile } from '@job-radar/jobs';
 import { revalidatePath } from 'next/cache';
@@ -145,6 +145,18 @@ export async function connectWithDirectTokensAction(params: {
   try {
     const session = await requireSession();
     const userId = session.user.id;
+
+    // Verifying a token calls Upwork, so it goes through the same gate as
+    // everything else.
+    const guard = await getUpworkGuardStatus();
+    if (guard.blocked) {
+      return {
+        success: false,
+        error:
+          guard.settings.upworkDisabledReason ||
+          'Upwork access is disabled by an administrator. Enable it under Admin → Upwork Integration first.',
+      };
+    }
 
     // Verify token by calling Upwork MCP resolveOrgUid
     const { UpworkMcpClient, encryptTokens } = await import('@job-radar/core/upwork');

@@ -4,7 +4,18 @@ import { auth } from '../../lib/auth';
 import { headers } from 'next/headers';
 // eq/sql come from @job-radar/db, which re-exports them. apps/web does not
 // depend on drizzle-orm directly.
-import { db, users, jobs, proposalDrafts, eq, sql } from '@job-radar/db';
+import {
+  db,
+  users,
+  jobs,
+  proposalDrafts,
+  upworkConnections,
+  getPlatformSettings,
+  updatePlatformSettings,
+  getUpworkUsageToday,
+  eq,
+  sql,
+} from '@job-radar/db';
 import { revalidatePath } from 'next/cache';
 
 /** Roles this application recognises. Anything else is rejected. */
@@ -115,6 +126,104 @@ export async function updateUserRoleAction(userId: string, newRole: string) {
     await db.update(users).set({ role: newRole, updatedAt: new Date() }).where(eq(users.id, userId));
     revalidatePath('/admin');
     return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+/** Current Upwork integration state plus today's usage per connected identity. */
+export async function getUpworkIntegrationAction() {
+  try {
+    await checkAdmin();
+
+    const settings = await getPlatformSettings();
+
+    const connections = await db
+      .select({
+        orgUid: upworkConnections.orgUid,
+        accountName: upworkConnections.accountName,
+        isActive: upworkConnections.isActive,
+        email: users.email,
+      })
+      .from(upworkConnections)
+      .leftJoin(users, eq(users.id, upworkConnections.userId));
+
+    // Usage is per Upwork identity, so collapse accounts sharing one org_uid.
+    const identities = new Map<string, { orgUid: string; accounts: string[]; usedToday: number }>();
+    for (const c of connections) {
+      if (!c.orgUid) continue;
+      const entry = identities.get(c.orgUid) ?? { orgUid: c.orgUid, accounts: [], usedToday: 0 };
+      if (c.email) entry.accounts.push(c.email);
+      identities.set(c.orgUid, entry);
+    }
+    for (const entry of identities.values()) {
+      entry.usedToday = await getUpworkUsageToday(entry.orgUid);
+    }
+
+    return {
+      success: true,
+      settings,
+      identities: [...identities.values()],
+      connectionCount: connections.length,
+    };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+/** Flips the master kill switch for all Upwork traffic. */
+export async function setUpworkPollingEnabledAction(enabled: boolean, reason?: string) {
+  try {
+    const admin = await checkAdmin();
+
+    const settings = await updatePlatformSettings(
+      {
+        upworkPollingEnabled: enabled,
+        upworkDisabledReason: enabled ? null : (reason?.trim() || 'Disabled by administrator'),
+      },
+      admin.id,
+    );
+
+    revalidatePath('/admin');
+    revalidatePath('/dashboard');
+    return { success: true, settings };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Updates the rate controls.
+ *
+ * Values are clamped to a safe envelope so a mistyped figure cannot recreate
+ * the request volume that caused the original account restriction.
+ */
+export async function updateUpworkRateSettingsAction(input: {
+  pollIntervalMinutes: number;
+  maxPagesPerProfile: number;
+  minSecondsBetweenCalls: number;
+  maxToolCallsPerDay: number;
+  maxEnrichmentCallsPerRun: number;
+}) {
+  try {
+    const admin = await checkAdmin();
+
+    const clamp = (v: number, min: number, max: number, fallback: number) =>
+      Number.isFinite(v) ? Math.max(min, Math.min(max, v)) : fallback;
+
+    const settings = await updatePlatformSettings(
+      {
+        pollIntervalMinutes: Math.round(clamp(input.pollIntervalMinutes, 15, 1440, 60)),
+        maxPagesPerProfile: Math.round(clamp(input.maxPagesPerProfile, 1, 5, 2)),
+        minSecondsBetweenCalls: String(clamp(input.minSecondsBetweenCalls, 1, 60, 3)),
+        maxToolCallsPerDay: Math.round(clamp(input.maxToolCallsPerDay, 10, 5000, 500)),
+        maxEnrichmentCallsPerRun: Math.round(clamp(input.maxEnrichmentCallsPerRun, 0, 20, 5)),
+      },
+      admin.id,
+    );
+
+    revalidatePath('/admin');
+    return { success: true, settings };
   } catch (err: any) {
     return { success: false, error: err.message };
   }

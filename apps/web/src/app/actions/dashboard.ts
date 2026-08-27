@@ -1,6 +1,6 @@
 'use server';
 
-import { db, jobs, jobAlerts, matches, searchProfiles, pollRuns, upworkConnections, whatsappConfigs, aiCredentials, eq, and, desc, gte, sql } from '@job-radar/db';
+import { db, jobs, jobAlerts, matches, searchProfiles, pollRuns, upworkConnections, whatsappConfigs, aiCredentials, getUpworkGuardStatus, eq, and, desc, gte, sql } from '@job-radar/db';
 import { requireSession } from '../../lib/require-session';
 import { logger } from '@job-radar/core/logger';
 import { runJobPoll } from '@job-radar/jobs';
@@ -176,6 +176,19 @@ export async function getDashboardDataAction() {
 export async function triggerPollNowAction() {
   try {
     const session = await requireSession();
+
+    // "Check Upwork Now" is a direct browser-triggered path to Upwork. Gate it
+    // explicitly so the button cannot generate traffic while polling is off.
+    const status = await getUpworkGuardStatus();
+    if (status.blocked) {
+      return {
+        success: false,
+        error:
+          status.settings.upworkDisabledReason ||
+          'Upwork access is currently disabled by an administrator. No requests are being sent to Upwork.',
+      };
+    }
+
     const result = await runJobPoll({
       userId: session.user.id,
       triggerType: 'manual',

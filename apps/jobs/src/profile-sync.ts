@@ -1,4 +1,11 @@
-import { db, upworkProfileSnapshots, upworkConnections, eq } from '@job-radar/db';
+import {
+  db,
+  upworkProfileSnapshots,
+  upworkConnections,
+  assertUpworkAllowed,
+  UpworkBlockedError,
+  eq,
+} from '@job-radar/db';
 import { UpworkMcpClient, decryptTokens } from '@job-radar/core/upwork';
 import { logger } from '@job-radar/core/logger';
 
@@ -8,6 +15,17 @@ export async function syncUpworkProfile(
   orgUidParam?: string,
 ): Promise<{ success: boolean; snapshotId?: string; error?: string }> {
   try {
+    // Profile sync issues Upwork tool calls, so it obeys the same gate.
+    try {
+      await assertUpworkAllowed(orgUidParam);
+    } catch (err) {
+      if (err instanceof UpworkBlockedError) {
+        logger.warn({ userId, code: err.code }, err.message);
+        return { success: false, error: err.message };
+      }
+      throw err;
+    }
+
     let client = upworkClient;
     let orgUid = orgUidParam;
 
