@@ -10,16 +10,18 @@
  * Point DATABASE_URL at the environment you want to inspect (e.g. AWS) before
  * running.
  */
+// 'dotenv/config' must be imported first: the db client below reads
+// DATABASE_URL at module-evaluation time.
 import 'dotenv/config';
-import postgres from 'postgres';
+// Imported by relative path because the workspace root cannot resolve either
+// '@job-radar/db' or 'postgres' - only packages/db depends on them.
+import { client as sql } from '../packages/db/src/client.js';
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) {
-  console.error('DATABASE_URL is not set.');
+  console.error('DATABASE_URL is not set. Point it at the environment you want to inspect.');
   process.exit(1);
 }
-
-const sql = postgres(connectionString, { prepare: false, connect_timeout: 10 });
 const emailFilter = process.argv[2] ?? null;
 
 const ok = (m: string) => console.log(`  \x1b[32mOK\x1b[0m    ${m}`);

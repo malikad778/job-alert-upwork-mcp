@@ -1,9 +1,12 @@
 import 'dotenv/config';
-import { db, users } from '@job-radar/db';
-import { eq } from 'drizzle-orm';
+// Root scripts are run with tsx from the workspace root, which cannot resolve
+// the '@job-radar/db' alias. Existing scripts import by relative path instead.
+import { db, users, eq } from '../packages/db/src/index.js';
 
 async function main() {
-  const email = 'adnan@jobradar.io';
+  // Accept the target on the command line so the script is not tied to one
+  // hardcoded account: pnpm tsx scripts/set-admin.ts someone@example.com
+  const email = process.argv[2] ?? 'adnan@jobradar.io';
   console.log(`Setting role of ${email} to admin...`);
 
   try {

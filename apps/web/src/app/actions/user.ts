@@ -2,8 +2,7 @@
 
 import { auth } from '../../lib/auth';
 import { headers } from 'next/headers';
-import { db, users } from '@job-radar/db';
-import { eq } from 'drizzle-orm';
+import { db, users, eq } from '@job-radar/db';
 import { revalidatePath } from 'next/cache';
 
 export async function updateProfileAction(data: { name?: string; timezone?: string; locale?: string }) {

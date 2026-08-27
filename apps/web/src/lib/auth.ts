@@ -46,6 +46,13 @@ export const auth = betterAuth({
         type: 'string',
         required: false,
         defaultValue: 'user',
+        /**
+         * SECURITY: without input:false better-auth copies any `role` supplied
+         * in the sign-up request body straight onto the new user, letting
+         * anyone self-register as an admin. With input:false the field is
+         * forced to defaultValue on create and can only be changed server-side.
+         */
+        input: false,
       }
     }
   },

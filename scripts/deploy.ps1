@@ -15,17 +15,41 @@
     This also removes the old behaviour of embedding .env in EC2 user-data, which
     left credentials readable via the instance metadata service.
 
+    Default mode UPDATES the existing instance in place over SSM, preserving the
+    database, the public IP and the Cloudflare origin. Pass -NewInstance only
+    when you genuinely want to provision a replacement box - it starts from an
+    empty database and gets a different IP, which breaks the Meta webhook and
+    Upwork OAuth redirect until they are re-registered.
+
+.PARAMETER NewInstance
+    Provision a brand-new EC2 instance instead of updating the running one.
+
+.PARAMETER InstanceId
+    Target a specific instance. Defaults to the running instance tagged
+    Name=job-radar-web (errors if there is more than one).
+
+.PARAMETER SkipBackup
+    Skip the pre-update database dump. Not recommended.
+
 .PARAMETER KeepArchive
     Keep the local .tar.gz after upload (useful for inspecting what shipped).
 
 .PARAMETER InstanceType
-    EC2 instance type. Defaults to t3.small.
+    EC2 instance type for -NewInstance. Defaults to t3.small.
 
 .EXAMPLE
     pwsh scripts/deploy.ps1
+    Updates the running instance in place.
+
+.EXAMPLE
+    pwsh scripts/deploy.ps1 -NewInstance
+    Provisions a replacement instance with an empty database.
 #>
 [CmdletBinding()]
 param(
+    [switch]$NewInstance,
+    [string]$InstanceId,
+    [switch]$SkipBackup,
     [switch]$KeepArchive,
     [string]$InstanceType = "t3.small"
 )
@@ -215,7 +239,146 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Upload to S3 failed." }
     Write-Host "    Upload complete." -ForegroundColor DarkGray
 
-    # ── Networking ────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
+    # UPDATE-IN-PLACE (default). Preserves the database, the public IP and the
+    # Cloudflare origin. Everything below the NewInstance guard provisions a
+    # replacement box and is only reached with -NewInstance.
+    # ─────────────────────────────────────────────────────────────────────────
+    if (-not $NewInstance) {
+        Write-Host "==> Resolving target instance..." -ForegroundColor Cyan
+
+        $targetId = $InstanceId
+        if (-not $targetId) {
+            $found = Get-AwsValue ec2 describe-instances `
+                --filters "Name=tag:Name,Values=job-radar-web" "Name=instance-state-name,Values=running" `
+                --query "Reservations[].Instances[].InstanceId" --output text
+
+            $ids = @()
+            if ($found) { $ids = $found -split '\s+' | Where-Object { $_ } }
+
+            if ($ids.Count -eq 0) {
+                throw "No running instance tagged Name=job-radar-web. Use -NewInstance to provision one."
+            }
+            if ($ids.Count -gt 1) {
+                throw "Found $($ids.Count) running instances ($($ids -join ', ')). Pass -InstanceId to pick one."
+            }
+            $targetId = $ids[0]
+        }
+
+        $targetIp = Get-AwsValue ec2 describe-instances --instance-ids $targetId `
+            --query "Reservations[0].Instances[0].PublicIpAddress" --output text
+        Write-Host "    Target: $targetId ($targetIp)" -ForegroundColor DarkGray
+
+        # SSM is the transport, so confirm the agent is reachable before we
+        # start mutating the box.
+        $ping = Get-AwsValue ssm describe-instance-information `
+            --filters "Key=InstanceIds,Values=$targetId" `
+            --query "InstanceInformationList[0].PingStatus" --output text
+        if ($ping -ne "Online") {
+            throw "SSM agent on $targetId is '$ping', not Online. Cannot update remotely."
+        }
+        Write-Host "    SSM agent online." -ForegroundColor DarkGray
+
+        # The remote script is intentionally fail-fast: if the build breaks we
+        # stop before restarting, leaving the previous release serving traffic.
+        $backupStep = if ($SkipBackup) {
+            "echo '==> Skipping database backup (-SkipBackup).'"
+        } else {
+            "echo '==> Backing up database...'; mkdir -p `$APP_DIR/../backups; docker exec postgres pg_dump -U postgres -d job_radar --format=custom | gzip > /home/ec2-user/backups/job_radar-pre-$stamp.dump.gz; ls -lh /home/ec2-user/backups/job_radar-pre-$stamp.dump.gz"
+        }
+
+        $remote = @(
+            "set -euo pipefail",
+            "export PATH=/usr/local/bin:/usr/bin:/bin",
+            "APP_DIR=/home/ec2-user/job-radar-upwork-mcp",
+            "$backupStep",
+            "echo '==> Downloading release...'",
+            "aws s3 cp s3://$bucket/$s3Key /tmp/release-$stamp.tar.gz --region $region",
+            "echo '==> Preserving .env...'",
+            "cp `$APP_DIR/.env /tmp/env-backup-$stamp",
+            "echo '==> Extracting over existing release...'",
+            # .env is excluded deliberately. The archive carries the DEVELOPER's
+            # .env (localhost APP_URL / BETTER_AUTH_URL / OAuth redirect);
+            # applying it to production would break login and the Upwork OAuth
+            # callback. Server-side configuration stays server-side.
+            "tar -xzf /tmp/release-$stamp.tar.gz -C `$APP_DIR --exclude=./.env",
+            "rm -f /tmp/release-$stamp.tar.gz",
+            "if [ ! -s `$APP_DIR/.env ]; then echo 'FATAL: .env missing after extract, restoring backup'; cp /tmp/env-backup-$stamp `$APP_DIR/.env; fi",
+            "chown -R ec2-user:ec2-user `$APP_DIR",
+            "cd `$APP_DIR",
+            "echo '==> Installing dependencies...'",
+            "pnpm install --frozen-lockfile",
+            "echo '==> Syncing database schema...'",
+            "export DATABASE_URL=postgresql://postgres:postgres@localhost:5432/job_radar",
+            # This database was created with db:push and has no drizzle
+            # migrations table, so push is the correct way to reconcile it.
+            "pnpm --filter @job-radar/db db:push --force",
+            "echo '==> Building...'",
+            "pnpm --recursive run build",
+            "echo '==> Restarting services...'",
+            "systemctl restart jobradar",
+            "systemctl restart jobradar-worker || echo 'WARN: worker restart failed'",
+            "sleep 5",
+            "echo web=`$(systemctl is-active jobradar)",
+            "echo worker=`$(systemctl is-active jobradar-worker)",
+            "echo '==> Update complete.'"
+        )
+
+        $paramFile = Join-Path $env:TEMP "job-radar-ssm-$stamp.json"
+        Write-Utf8NoBom -Path $paramFile -Content (@{ commands = $remote } | ConvertTo-Json -Depth 5 -Compress)
+
+        Write-Host "==> Running in-place update over SSM (this takes a few minutes)..." -ForegroundColor Cyan
+        $cmdId = Get-AwsValue ssm send-command --instance-ids $targetId `
+            --document-name "AWS-RunShellScript" `
+            --parameters "file://$paramFile" `
+            --timeout-seconds 1800 `
+            --query "Command.CommandId" --output text
+        Remove-Item $paramFile -Force -ErrorAction SilentlyContinue
+
+        if (-not $cmdId) { throw "Failed to dispatch SSM command." }
+        Write-Host "    Command: $cmdId" -ForegroundColor DarkGray
+
+        $status = "Pending"
+        for ($i = 0; $i -lt 90; $i++) {
+            Start-Sleep -Seconds 10
+            $status = Get-AwsValue ssm get-command-invocation --command-id $cmdId --instance-id $targetId --query "Status" --output text
+            if ($status -in @("Success", "Failed", "Cancelled", "TimedOut")) { break }
+            Write-Host "    ...$status" -ForegroundColor DarkGray
+        }
+
+        $stdout = Get-AwsValue ssm get-command-invocation --command-id $cmdId --instance-id $targetId --query "StandardOutputContent" --output text
+        $stderr = Get-AwsValue ssm get-command-invocation --command-id $cmdId --instance-id $targetId --query "StandardErrorContent" --output text
+
+        Write-Host ""
+        Write-Host "--- remote output ---" -ForegroundColor DarkGray
+        if ($stdout) { Write-Host $stdout }
+        if ($status -ne "Success" -and $stderr) {
+            Write-Host "--- remote errors ---" -ForegroundColor Red
+            Write-Host $stderr
+        }
+
+        if ($status -ne "Success") {
+            Write-Host ""
+            Write-Host "UPDATE FAILED (status: $status)." -ForegroundColor Red
+            Write-Host "The previous release is still installed. Database dump: /home/ec2-user/backups/" -ForegroundColor Yellow
+            exit 1
+        }
+
+        Write-Host ""
+        Write-Host "========================================" -ForegroundColor Green
+        Write-Host " Update complete" -ForegroundColor Green
+        Write-Host "========================================" -ForegroundColor Green
+        Write-Host " Instance : $targetId"
+        Write-Host " URL      : http://$targetIp"
+        Write-Host " Release  : s3://$bucket/$s3Key"
+        Write-Host " Database and public IP preserved."
+        Write-Host "========================================" -ForegroundColor Green
+
+        if (-not $KeepArchive) { Remove-Item $archivePath -Force -ErrorAction SilentlyContinue }
+        return
+    }
+
+    # ── Networking (provisioning path, -NewInstance only) ─────────────────────
     Write-Host "==> Resolving default VPC..." -ForegroundColor Cyan
     $vpcId = (aws ec2 describe-vpcs --filters "Name=is-default,Values=true" --query "Vpcs[0].VpcId" --output text).Trim()
     if (-not $vpcId -or $vpcId -eq "None") { throw "No default VPC found. Specify a VPC manually." }
