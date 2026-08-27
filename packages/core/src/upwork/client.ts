@@ -39,32 +39,70 @@ export class UpworkMcpClient {
   private transport: SSEClientTransport;
   private rateLimiter: UpworkRateLimiter;
   private isConnected = false;
+  /** In-flight connect, so concurrent callers share one attempt. */
+  private connecting: Promise<void> | null = null;
   private config: UpworkClientConfig;
+  private readonly url: string;
 
   constructor(config: UpworkClientConfig) {
     this.config = config;
-    const url = config.mcpServerUrl || 'https://mcp.upwork.com/mcp';
+    this.url = config.mcpServerUrl || 'https://mcp.upwork.com/mcp';
     this.rateLimiter = new UpworkRateLimiter((config.minGapSeconds ?? 1.5) * 1000);
 
-    this.transport = new SSEClientTransport(new URL(url), {
+    this.transport = this.createTransport();
+    this.client = this.createClient();
+  }
+
+  private createTransport(): SSEClientTransport {
+    return new SSEClientTransport(new URL(this.url), {
       requestInit: {
         headers: {
-          Authorization: `Bearer ${config.accessToken}`,
+          Authorization: `Bearer ${this.config.accessToken}`,
         },
       },
     });
-
-    this.client = new Client(
-      { name: 'job-radar', version: '1.0.0' },
-      { capabilities: {} },
-    );
   }
 
+  private createClient(): Client {
+    return new Client({ name: 'job-radar', version: '1.0.0' }, { capabilities: {} });
+  }
+
+  /**
+   * Connects, tolerating a failed previous attempt.
+   *
+   * A transport is single-use: Client.connect() binds it even when the
+   * handshake then fails (for example an expired token returning 401). The old
+   * implementation only set isConnected on success, so after any failure every
+   * later call re-entered connect() with an already-bound transport and died
+   * with "Already connected to a transport" - masking the real error and
+   * leaving every poll returning zero jobs. Each attempt now starts from a
+   * fresh transport/client pair, and the underlying error is preserved.
+   */
   async connect(): Promise<void> {
-    if (!this.isConnected) {
-      await this.client.connect(this.transport);
-      this.isConnected = true;
-    }
+    if (this.isConnected) return;
+    if (this.connecting) return this.connecting;
+
+    this.connecting = (async () => {
+      try {
+        await this.client.connect(this.transport);
+        this.isConnected = true;
+      } catch (err) {
+        // Discard the consumed transport so the next attempt can succeed.
+        try {
+          await this.client.close();
+        } catch {
+          // The client may never have opened; nothing to clean up.
+        }
+        this.transport = this.createTransport();
+        this.client = this.createClient();
+        this.isConnected = false;
+        throw err;
+      } finally {
+        this.connecting = null;
+      }
+    })();
+
+    return this.connecting;
   }
 
   async close(): Promise<void> {
