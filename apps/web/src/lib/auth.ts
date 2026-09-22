@@ -7,7 +7,10 @@ export const auth = betterAuth({
   trustedOrigins: [
     'http://localhost:3000',
     'http://127.0.0.1:3000',
-    'http://13.234.31.69',
+    'http://3.6.5.18',
+    'https://3.6.5.18',
+    'http://ec2-3-6-5-18.ap-south-1.compute.amazonaws.com',
+    'https://ec2-3-6-5-18.ap-south-1.compute.amazonaws.com',
     'https://upwork-mcp.site',
     'http://upwork-mcp.site',
     ...(process.env.BETTER_AUTH_URL ? [process.env.BETTER_AUTH_URL] : []),

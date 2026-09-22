@@ -67,6 +67,9 @@ importers:
       '@job-radar/jobs':
         specifier: workspace:*
         version: link:../jobs
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.6.1
+        version: 1.30.0(zod@3.25.76)
       '@tanstack/react-query':
         specifier: ^5.66.0
         version: 5.102.3(react@19.2.8)
@@ -98,8 +101,11 @@ importers:
         specifier: ^3.0.1
         version: 3.6.0
       zod:
-        specifier: ^3.24.2
+        specifier: ^3.25.76
         version: 3.25.76
+      zod-to-json-schema:
+        specifier: ^3.25.2
+        version: 3.25.2(zod@3.25.76)
     devDependencies:
       '@job-radar/config':
         specifier: workspace:*

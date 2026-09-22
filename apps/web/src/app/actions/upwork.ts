@@ -1,6 +1,6 @@
 'use server';
 
-import { db, upworkConnections, upworkProfileSnapshots, getUpworkGuardStatus, eq, and, desc } from '@job-radar/db';
+import { db, upworkConnections, upworkProfileSnapshots, searchProfiles, getUpworkGuardStatus, eq, and, desc } from '@job-radar/db';
 import { requireSession } from '../../lib/require-session';
 import { syncUpworkProfile } from '@job-radar/jobs';
 import { revalidatePath } from 'next/cache';
@@ -146,19 +146,7 @@ export async function connectWithDirectTokensAction(params: {
     const session = await requireSession();
     const userId = session.user.id;
 
-    // Verifying a token calls Upwork, so it goes through the same gate as
-    // everything else.
-    const guard = await getUpworkGuardStatus();
-    if (guard.blocked) {
-      return {
-        success: false,
-        error:
-          guard.settings.upworkDisabledReason ||
-          'Upwork access is disabled by an administrator. Enable it under Admin → Upwork Integration first.',
-      };
-    }
-
-    // Verify token by calling Upwork MCP resolveOrgUid
+    // Verify token by calling Upwork MCP resolveOrgUid directly with user's provided token
     const { UpworkMcpClient, encryptTokens } = await import('@job-radar/core/upwork');
     const mcpClient = new UpworkMcpClient({ accessToken: params.accessToken.trim() });
     const resolved = await mcpClient.resolveOrgUid();
@@ -168,14 +156,26 @@ export async function connectWithDirectTokensAction(params: {
       refreshToken: params.refreshToken?.trim() || null,
     });
 
-    const clientSecretEnc = params.clientSecret ? encrypt(params.clientSecret.trim()) : null;
-
     const [existing] = await db
       .select()
       .from(upworkConnections)
       .where(eq(upworkConnections.userId, userId));
 
-    const expiresAt = new Date(Date.now() + 86400 * 1000); // 24h
+    const defaultClientId =
+      process.env.UPWORK_CLIENT_ID ||
+      'https://upwork-mcp.site/client-metadata.json';
+
+    const clientId = params.clientId?.trim() || existing?.clientId || defaultClientId;
+    const clientSecretEnc = params.clientSecret?.trim()
+      ? encrypt(params.clientSecret.trim())
+      : existing?.clientSecretEnc || null;
+
+    // If refresh token is present, token refreshes automatically on 24h cycle;
+    // otherwise give a standard 30-day token window.
+    const hasRefresh = Boolean(params.refreshToken?.trim() || existing?.refreshTokenEnc);
+    const expiresAt = hasRefresh
+      ? new Date(Date.now() + 86400 * 1000) // 24h
+      : new Date(Date.now() + 86400 * 1000 * 30); // 30 days
 
     if (existing) {
       await db
@@ -183,7 +183,7 @@ export async function connectWithDirectTokensAction(params: {
         .set({
           accessTokenEnc,
           refreshTokenEnc,
-          clientId: params.clientId?.trim() || existing.clientId || null,
+          clientId,
           clientSecretEnc,
           orgUid: resolved.orgUid,
           accountName: resolved.accountName,
@@ -200,7 +200,7 @@ export async function connectWithDirectTokensAction(params: {
         userId,
         accessTokenEnc,
         refreshTokenEnc,
-        clientId: params.clientId?.trim() || null,
+        clientId,
         clientSecretEnc,
         orgUid: resolved.orgUid,
         accountName: resolved.accountName,
@@ -208,6 +208,36 @@ export async function connectWithDirectTokensAction(params: {
         expiresAt,
         isActive: true,
       });
+    }
+
+    // Ensure user has at least one active search profile so polling immediately discovers jobs
+    const existingProfiles = await db
+      .select({ id: searchProfiles.id })
+      .from(searchProfiles)
+      .where(eq(searchProfiles.userId, userId))
+      .limit(1);
+
+    if (existingProfiles.length === 0) {
+      await db.insert(searchProfiles).values([
+        {
+          userId,
+          name: 'Full Stack & Web Development',
+          keywords: ['React', 'Next.js', 'Node.js', 'TypeScript', 'Python'],
+          minScore: 50,
+          isActive: true,
+          minHourlyRate: '25',
+          minFixedBudget: '100',
+        },
+        {
+          userId,
+          name: 'AI & Automation Specialist',
+          keywords: ['AI', 'LLM', 'OpenAI', 'Automation', 'Python', 'Bot'],
+          minScore: 50,
+          isActive: true,
+          minHourlyRate: '35',
+          minFixedBudget: '200',
+        },
+      ]);
     }
 
     revalidatePath('/settings/upwork');

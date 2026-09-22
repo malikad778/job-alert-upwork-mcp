@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { randomBytes, createHash } from 'node:crypto';
+import { db, upworkConnections, eq } from '@job-radar/db';
 import { requireSession, isRedirectError } from '../../../../lib/require-session';
 
 export async function GET(req: NextRequest) {
@@ -13,7 +14,13 @@ export async function GET(req: NextRequest) {
         ? `${req.headers.get('x-forwarded-proto')}://${req.headers.get('host')}`
         : req.nextUrl.origin);
 
+    const [existing] = await db
+      .select({ clientId: upworkConnections.clientId })
+      .from(upworkConnections)
+      .where(eq(upworkConnections.userId, userId));
+
     const clientId =
+      existing?.clientId ||
       process.env.UPWORK_CLIENT_ID ||
       `${origin}/client-metadata.json`;
 
@@ -46,6 +53,13 @@ export async function GET(req: NextRequest) {
     });
 
     response.cookies.set('upwork_oauth_verifier', verifier, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 60 * 10,
+    });
+
+    response.cookies.set('upwork_oauth_client_id', clientId, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',

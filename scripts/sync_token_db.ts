@@ -1,10 +1,10 @@
 import { db, upworkConnections, users, searchProfiles, eq } from '@job-radar/db';
 import { encryptTokens } from '@job-radar/core/upwork';
 
-const accessToken = 'oauth2v2_pmc_2659485c4fa5f8aedbc9aa740ef83fdf';
-const refreshToken = 'oauth2v2_pmc_cf14ea5d483521e6f830d760145eb510';
-const orgUid = '1366651036341481473';
-const accountName = 'Malik Adnan Haider';
+const accessToken = process.env.UPWORK_ACCESS_TOKEN || '';
+const refreshToken = process.env.UPWORK_REFRESH_TOKEN || '';
+const orgUid = process.env.UPWORK_ORG_UID || '';
+const accountName = process.env.UPWORK_ACCOUNT_NAME || 'Default Account';
 
 async function main() {
   console.log('Connecting Upwork MCP with org_uid for registered users in DB...');

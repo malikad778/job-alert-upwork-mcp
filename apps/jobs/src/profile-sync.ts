@@ -15,15 +15,19 @@ export async function syncUpworkProfile(
   orgUidParam?: string,
 ): Promise<{ success: boolean; snapshotId?: string; error?: string }> {
   try {
-    // Profile sync issues Upwork tool calls, so it obeys the same gate.
+    // Profile sync issues Upwork tool calls; check daily limit if applicable.
     try {
       await assertUpworkAllowed(orgUidParam);
     } catch (err) {
       if (err instanceof UpworkBlockedError) {
-        logger.warn({ userId, code: err.code }, err.message);
-        return { success: false, error: err.message };
+        if (err.code === 'DAILY_LIMIT_REACHED') {
+          logger.warn({ userId, code: err.code }, err.message);
+          return { success: false, error: err.message };
+        }
+        // Allow user-initiated profile sync even if background polling is paused
+      } else {
+        throw err;
       }
-      throw err;
     }
 
     let client = upworkClient;

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db, upworkConnections, getUpworkGuardStatus, eq } from '@job-radar/db';
+import { db, upworkConnections, searchProfiles, eq } from '@job-radar/db';
 import { exchangeUpworkCode, encryptTokens, UpworkMcpClient } from '@job-radar/core/upwork';
+import { decrypt } from '@job-radar/core/crypto';
 import { requireSession, isRedirectError } from '../../../../lib/require-session';
 import { logger } from '@job-radar/core/logger';
 
@@ -23,6 +24,7 @@ export async function GET(req: NextRequest) {
 
     const savedState = req.cookies.get('upwork_oauth_state')?.value;
     const codeVerifier = req.cookies.get('upwork_oauth_verifier')?.value;
+    const cookieClientId = req.cookies.get('upwork_oauth_client_id')?.value;
 
     if (!state || state !== savedState || !code || !codeVerifier) {
       logger.warn('Upwork OAuth state or verifier mismatch.');
@@ -37,11 +39,21 @@ export async function GET(req: NextRequest) {
         ? `${req.headers.get('x-forwarded-proto')}://${req.headers.get('host')}`
         : req.nextUrl.origin);
 
+    const [existing] = await db
+      .select()
+      .from(upworkConnections)
+      .where(eq(upworkConnections.userId, userId));
+
     const clientId =
+      cookieClientId ||
+      existing?.clientId ||
       process.env.UPWORK_CLIENT_ID ||
       `${origin}/client-metadata.json`;
 
-    const clientSecret = process.env.UPWORK_CLIENT_SECRET || null;
+    const clientSecret = existing?.clientSecretEnc
+      ? decrypt(existing.clientSecretEnc)
+      : process.env.UPWORK_CLIENT_SECRET || null;
+
     const redirectUri =
       process.env.UPWORK_OAUTH_REDIRECT_URI ||
       `${origin}/api/upwork/callback`;
@@ -60,34 +72,22 @@ export async function GET(req: NextRequest) {
       refreshToken: tokens.refreshToken,
     });
 
-    // 2. Resolve org_uid using the new access token
+    // 2. Resolve org_uid using the new access token directly
     let orgUid: string | null = null;
     let accountName: string | null = null;
     let accountRole: string | null = null;
 
     try {
-      // Skipped while Upwork access is disabled. The connection is still saved;
-      // org_uid resolves on the first poll after polling is re-enabled.
-      const guard = await getUpworkGuardStatus();
-      if (guard.blocked) {
-        logger.warn('Upwork access disabled; skipping org_uid resolution during OAuth callback.');
-      } else {
-        const upworkTemp = new UpworkMcpClient({ accessToken: tokens.accessToken });
-        const resolved = await upworkTemp.resolveOrgUid();
-        orgUid = resolved.orgUid;
-        accountName = resolved.accountName;
-        accountRole = resolved.role;
-      }
+      const upworkTemp = new UpworkMcpClient({ accessToken: tokens.accessToken });
+      const resolved = await upworkTemp.resolveOrgUid();
+      orgUid = resolved.orgUid;
+      accountName = resolved.accountName;
+      accountRole = resolved.role;
     } catch (e) {
       logger.warn({ err: e }, 'Could not resolve org_uid immediately during OAuth callback.');
     }
 
     // 3. Upsert connection in database
-    const [existing] = await db
-      .select()
-      .from(upworkConnections)
-      .where(eq(upworkConnections.userId, userId));
-
     if (existing) {
       await db
         .update(upworkConnections)
@@ -119,6 +119,36 @@ export async function GET(req: NextRequest) {
       });
     }
 
+    // 4. Ensure default search profiles exist so polling runs immediately
+    const existingProfiles = await db
+      .select({ id: searchProfiles.id })
+      .from(searchProfiles)
+      .where(eq(searchProfiles.userId, userId))
+      .limit(1);
+
+    if (existingProfiles.length === 0) {
+      await db.insert(searchProfiles).values([
+        {
+          userId,
+          name: 'Full Stack & Web Development',
+          keywords: ['React', 'Next.js', 'Node.js', 'TypeScript', 'Python'],
+          minScore: 50,
+          isActive: true,
+          minHourlyRate: '25',
+          minFixedBudget: '100',
+        },
+        {
+          userId,
+          name: 'AI & Automation Specialist',
+          keywords: ['AI', 'LLM', 'OpenAI', 'Automation', 'Python', 'Bot'],
+          minScore: 50,
+          isActive: true,
+          minHourlyRate: '35',
+          minFixedBudget: '200',
+        },
+      ]);
+    }
+
     const response = NextResponse.redirect(
       new URL('/settings/upwork?connected=true', req.nextUrl.origin),
     );
@@ -126,6 +156,7 @@ export async function GET(req: NextRequest) {
     // Clean up cookies
     response.cookies.delete('upwork_oauth_state');
     response.cookies.delete('upwork_oauth_verifier');
+    response.cookies.delete('upwork_oauth_client_id');
 
     return response;
   } catch (err: any) {

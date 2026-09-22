@@ -7,6 +7,7 @@ import {
   jobAlerts,
   proposalDrafts,
   aiCredentials,
+  upworkProfileSnapshots,
   notificationSettings,
   whatsappConfigs,
   whatsappRecipients,
@@ -386,6 +387,22 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ status: 'ok' });
       }
 
+      // Load freelancer profile snapshot for this user
+      const [snapshot] = await db
+        .select()
+        .from(upworkProfileSnapshots)
+        .where(eq(upworkProfileSnapshots.userId, userId))
+        .orderBy(desc(upworkProfileSnapshots.fetchedAt))
+        .limit(1);
+
+      const freelancerProfile = {
+        title: snapshot?.title || 'Senior Software Engineer & Freelance Specialist',
+        overview: snapshot?.overview || 'Experienced developer dedicated to delivering reliable, scalable, and high-performance solutions.',
+        skills: (snapshot?.skills as string[]) || (job.skills as string[]) || ['TypeScript', 'JavaScript', 'Python', 'React', 'Node.js'],
+        hourlyRate: snapshot?.hourlyRate ? Number(snapshot.hourlyRate) : 45,
+        jobSuccessScore: snapshot?.jobSuccessScore ? Number(snapshot.jobSuccessScore) : 100,
+      };
+
       // Generate grounded proposal on-demand (§13)
       const proposal = await generateProposalOnDemand({
         job: {
@@ -412,13 +429,7 @@ export async function POST(req: NextRequest) {
           rawPayload: {},
           normalizerVersion: 1,
         },
-        freelancer: {
-          title: 'Senior Full Stack & Cloud Solutions Engineer',
-          overview: 'Experienced developer specializing in Laravel, Next.js, TypeScript, APIs, and cloud infrastructure.',
-          skills: ['Laravel', 'TypeScript', 'Next.js', 'React', 'Python', 'PostgreSQL', 'AWS'],
-          hourlyRate: 45,
-          jobSuccessScore: 100,
-        },
+        freelancer: freelancerProfile,
         preferences: {
           tone: 'professional',
           customInstructions: textBody && textBody.toLowerCase() !== 'proposal' ? textBody : undefined,
